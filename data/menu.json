@@ -1,0 +1,65 @@
+{
+    "auto_increment": 5,
+    "rows": [
+        {
+            "menu": "main",
+            "lang": "it",
+            "label": "Home",
+            "page_id": 1,
+            "url": "",
+            "parent_id": 0,
+            "sort": 1,
+            "target": "",
+            "rel": "",
+            "active": true,
+            "id": 1,
+            "created_at": "2026-07-30T15:34:11+02:00",
+            "updated_at": "2026-07-30T15:34:11+02:00"
+        },
+        {
+            "menu": "main",
+            "lang": "it",
+            "label": "Chi siamo",
+            "page_id": 3,
+            "url": "",
+            "parent_id": 0,
+            "sort": 2,
+            "target": "",
+            "rel": "",
+            "active": true,
+            "id": 2,
+            "created_at": "2026-07-30T15:34:12+02:00",
+            "updated_at": "2026-07-30T15:34:12+02:00"
+        },
+        {
+            "menu": "main",
+            "lang": "en",
+            "label": "Home",
+            "page_id": 2,
+            "url": "",
+            "parent_id": 0,
+            "sort": 1,
+            "target": "",
+            "rel": "",
+            "active": true,
+            "id": 3,
+            "created_at": "2026-07-30T15:34:12+02:00",
+            "updated_at": "2026-07-30T15:34:12+02:00"
+        },
+        {
+            "menu": "main",
+            "lang": "en",
+            "label": "About us",
+            "page_id": 4,
+            "url": "",
+            "parent_id": 0,
+            "sort": 2,
+            "target": "",
+            "rel": "",
+            "active": true,
+            "id": 4,
+            "created_at": "2026-07-30T15:34:12+02:00",
+            "updated_at": "2026-07-30T15:34:12+02:00"
+        }
+    ]
+}

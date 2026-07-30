@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpartanCMS - site template definition.
+
+  <positions>  editable areas offered by the backend.
+               scope="lang"  one block per language (edited under Header/Footer)
+               scope="page"  filled by the page itself (do not remove "page")
+
+  <layout>     the order in which the slots are printed inside <body>.
+               tag=""        prints the raw block without a wrapper
+               attrs=""      attributes added to the wrapper tag
+
+  Add a position here (e.g. "topbar" or "aside") and it immediately shows up
+  in the backend and in the rendered page - no PHP change required.
+-->
+<template>
+
+    <positions>
+        <position key="header" label="Header" scope="lang"/>
+        <position key="page"   label="Page content" scope="page"/>
+        <position key="footer" label="Footer" scope="lang"/>
+    </positions>
+
+    <layout>
+        <slot key="header" tag="header" attrs="id=&quot;site-header&quot;"/>
+        <slot key="page"   tag="main"   attrs="id=&quot;main&quot;"/>
+        <slot key="footer" tag="footer" attrs="id=&quot;site-footer&quot;"/>
+    </layout>
+
+</template>

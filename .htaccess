@@ -1,0 +1,144 @@
+# =============================================================================
+# SpartanCMS - Apache configuration
+# Routing, canonical URLs, compression, caching, security.
+# =============================================================================
+
+Options -Indexes -MultiViews
+DirectoryIndex index.php
+AddDefaultCharset UTF-8
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # RewriteBase is intentionally NOT set: Apache derives the per-directory
+    # prefix by itself, so the same file works at the domain root and in any
+    # subfolder (/CMS, /sites/foo, ...).
+    #
+    # Setting "RewriteBase /" while the CMS lives in /CMS makes every rewrite
+    # target the wrong directory (that is a 404 on every inner page), so only
+    # uncomment the line below - with the real subfolder - if your host serves
+    # this folder through an Alias and the automatic detection fails.
+    #
+    
+    # RewriteBase /subfolder/folder
+
+    # --- Force HTTPS (uncomment in production) -------------------------------
+    # RewriteCond %{HTTPS} !=on
+    # RewriteCond %{HTTP:X-Forwarded-Proto} !https
+    # RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
+    # --- Canonical host: strip or add www (pick one) --------------------------
+    # RewriteCond %{HTTP_HOST} ^www\.(.+)$ [NC]
+    # RewriteRule ^ https://%1%{REQUEST_URI} [R=301,L]
+
+    # --- Never expose index.php in a URL --------------------------------------
+    # The condition looks at the original request, so the internal rewrite at
+    # the bottom of this block cannot trigger a redirect loop.
+    RewriteCond %{THE_REQUEST} \s/+[^\s]*index\.php[\s?] [NC]
+    RewriteRule ^index\.php$ ./ [R=301,L]
+
+    # --- Block direct access to data, templates and internals -----------------
+    RewriteRule ^(data|includes)/ - [F,L]
+    RewriteRule ^(config\.php|template\.xml|composer\.json|README\.md)$ - [F,L]
+
+    # --- Static files and the generated sitemap are served as-is --------------
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # --- Everything else goes to the front controller -------------------------
+    # The homepage ("/") is handled here too: index.php resolves the default
+    # page of the default language, so the homepage never needs a slug.
+    RewriteRule ^ index.php [L]
+</IfModule>
+
+# -----------------------------------------------------------------------------
+# Compression
+# -----------------------------------------------------------------------------
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript
+    AddOutputFilterByType DEFLATE application/javascript application/x-javascript
+    AddOutputFilterByType DEFLATE application/json application/ld+json
+    AddOutputFilterByType DEFLATE application/xml application/rss+xml
+    AddOutputFilterByType DEFLATE image/svg+xml font/woff2 font/woff
+</IfModule>
+
+<IfModule mod_brotli.c>
+    AddOutputFilterByType BROTLI_COMPRESS text/html text/css text/javascript
+    AddOutputFilterByType BROTLI_COMPRESS application/javascript application/json
+    AddOutputFilterByType BROTLI_COMPRESS image/svg+xml
+</IfModule>
+
+# -----------------------------------------------------------------------------
+# Browser caching - HTML stays fresh, assets are cached hard
+# -----------------------------------------------------------------------------
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresDefault                          "access plus 1 month"
+    ExpiresByType text/html                 "access plus 0 seconds"
+    ExpiresByType application/xml           "access plus 1 hour"
+    ExpiresByType text/xml                  "access plus 1 hour"
+    ExpiresByType image/jpeg                "access plus 1 year"
+    ExpiresByType image/png                 "access plus 1 year"
+    ExpiresByType image/webp                "access plus 1 year"
+    ExpiresByType image/avif                "access plus 1 year"
+    ExpiresByType image/svg+xml             "access plus 1 year"
+    ExpiresByType image/x-icon              "access plus 1 year"
+    ExpiresByType font/woff2                "access plus 1 year"
+    ExpiresByType application/pdf           "access plus 1 month"
+    ExpiresByType text/css                  "access plus 1 year"
+    ExpiresByType application/javascript    "access plus 1 year"
+</IfModule>
+
+<IfModule mod_headers.c>
+    <FilesMatch "\.(jpg|jpeg|png|gif|webp|avif|svg|ico|woff2?|css|js)$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
+    <FilesMatch "\.(html|php|xml)$">
+        Header set Cache-Control "no-cache"
+    </FilesMatch>
+
+    # --- Security headers -----------------------------------------------------
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    # Enable once the site runs on HTTPS only:
+    # Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+
+    # Remove the ETag/Last-Modified duplication for static assets
+    Header unset ETag
+</IfModule>
+FileETag None
+
+# -----------------------------------------------------------------------------
+# Charset and MIME types
+# -----------------------------------------------------------------------------
+<IfModule mod_mime.c>
+    AddType application/ld+json           json
+    AddType image/avif                    avif
+    AddType image/webp                    webp
+    AddType font/woff2                    woff2
+    AddType application/manifest+json     webmanifest
+    AddCharset UTF-8 .html .css .js .xml .json
+</IfModule>
+
+# -----------------------------------------------------------------------------
+# Hard blocks
+# -----------------------------------------------------------------------------
+<FilesMatch "^(config\.php|\.htaccess|.*\.json|.*\.lock|.*\.tmp|composer\..*)$">
+    Require all denied
+</FilesMatch>
+
+# sitemap.xml and robots.txt must stay public
+<Files "sitemap.xml">
+    Require all granted
+</Files>
+<Files "robots.txt">
+    Require all granted
+</Files>
+<Files "index.php">
+    Require all granted
+</Files>
+<Files "backend.php">
+    Require all granted
+</Files>
