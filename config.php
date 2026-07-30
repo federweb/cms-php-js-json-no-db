@@ -103,7 +103,7 @@ const CMS_HEAD_COMPONENTS = [
     ],
 
     'uikit' => [
-        'enabled'    => true,
+        'enabled'    => false,
         'label'      => 'UIkit 3',
         'preconnect' => 'https://cdn.jsdelivr.net',
         'css' => [
