@@ -1,4 +1,4 @@
-# SpartanCMS
+# Feder°CMS
 
 A database-free CMS in PHP 8 (8.0+), JS, CSS and JSON. Built for two things only:
 **search engine visibility** and **speed** — without ever getting in the way of the
