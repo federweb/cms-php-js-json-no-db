@@ -759,6 +759,26 @@ tr:hover td{background:var(--bg)}
 .counter{font-size:.78rem;color:var(--muted);margin-top:.2rem}
 .counter.over{color:var(--err);font-weight:700}
 
+/* visual editor */
+.visual-editor-wrapper{position:relative}
+.visual-editor-toggle{position:absolute;bottom:.75rem;right:.75rem;display:flex;gap:.4rem;z-index:10}
+.visual-editor-toggle button{padding:.35rem .65rem;font-size:.8rem;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:4px;cursor:pointer;font-weight:600;transition:all .2s}
+.visual-editor-toggle button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.visual-editor-toggle button:hover{border-color:var(--accent)}
+.visual-editor-container{width:100%;border:1px solid var(--line);border-radius:6px;background:var(--panel);min-height:520px;display:none;overflow:auto;position:relative}
+.visual-editor-container.active{display:block}
+.visual-editor-content{padding:1.5rem;min-height:500px;outline:none;line-height:1.6;word-wrap:break-word;font-size:1rem}
+.visual-editor-content table{width:100%;border-collapse:collapse;margin:1rem 0}
+.visual-editor-content table,table td,table th{border:1px solid var(--line)}
+.visual-editor-content table td,.visual-editor-content table th{padding:.5rem}
+.visual-editor-content h1,.visual-editor-content h2,.visual-editor-content h3{margin:1rem 0 .5rem}
+.visual-editor-content p{margin:.75rem 0}
+.visual-editor-content ul,.visual-editor-content ol{margin:1rem 0;padding-left:2rem}
+.visual-editor-toolbar{display:none;padding:.5rem;border-bottom:1px solid var(--line);gap:.3rem;flex-wrap:wrap;background:var(--bg)}
+.visual-editor-container.active~.visual-editor-toolbar{display:flex}
+.visual-editor-toolbar button{padding:.35rem .5rem;font-size:.75rem;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:3px;cursor:pointer;font-weight:600;min-width:32px}
+.visual-editor-toolbar button:hover,.visual-editor-toolbar button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+
 /* media grid */
 .media-grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(11rem,1fr))}
 .media-item{border:1px solid var(--line);border-radius:var(--radius);padding:.6rem;background:var(--panel);font-size:.8rem}
@@ -1232,7 +1252,25 @@ case 'pages':
         </div>
 
         <div class="tabpane on" id="t-html">
-            <div class="panel">
+            <div class="panel visual-editor-wrapper">
+                <div class="visual-editor-container" id="visualEditor" contenteditable="true" spellcheck="false"></div>
+                <div class="visual-editor-toolbar" id="visualToolbar">
+                    <button type="button" data-cmd="bold" title="Bold"><strong>B</strong></button>
+                    <button type="button" data-cmd="italic" title="Italic"><em>I</em></button>
+                    <button type="button" data-cmd="underline" title="Underline"><u>U</u></button>
+                    <button type="button" data-cmd="strikethrough" title="Strikethrough"><s>S</s></button>
+                    <span style="width:1px;background:var(--line);margin:0 .2rem"></span>
+                    <button type="button" data-cmd="formatblock" data-value="p" title="Paragraph">P</button>
+                    <button type="button" data-cmd="formatblock" data-value="h2" title="Heading 2">H2</button>
+                    <button type="button" data-cmd="formatblock" data-value="h3" title="Heading 3">H3</button>
+                    <span style="width:1px;background:var(--line);margin:0 .2rem"></span>
+                    <button type="button" data-cmd="insertunorderedlist" title="Bullet list">• List</button>
+                    <button type="button" data-cmd="insertorderedlist" title="Numbered list">1. List</button>
+                </div>
+                <div class="visual-editor-toggle">
+                    <button type="button" id="btnCode" class="active">code</button>
+                    <button type="button" id="btnVisual">visual</button>
+                </div>
                 <?php b_editor('html', 'Page markup', (string)$p['html'], 'php',
                     'plain PHP+HTML. Helpers: e() cms_page_url() cms_menu_html() cms_media() cms_setting() cms_language_switcher(). $page, $lang, $settings are in scope.',
                     520); ?>
@@ -1849,6 +1887,81 @@ default:
                 .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
         });
         slugField.addEventListener('input', function () { slugField.dataset.touched = '1'; });
+    }
+
+    /* ---- Visual HTML editor toggle (pages only) ----------------------- */
+    var visualEditor = document.getElementById('visualEditor');
+    var htmlTextarea = document.getElementById('ed_html');
+    var btnCode = document.getElementById('btnCode');
+    var btnVisual = document.getElementById('btnVisual');
+    var aceEditor = htmlTextarea && htmlTextarea.previousElementSibling ? htmlTextarea.previousElementSibling.env && htmlTextarea.previousElementSibling.env.editor : null;
+
+    if (visualEditor && htmlTextarea && btnCode && btnVisual && aceEditor) {
+        var syncToVisual = function () {
+            visualEditor.innerHTML = htmlTextarea.value;
+        };
+
+        var syncToCode = function () {
+            htmlTextarea.value = visualEditor.innerHTML;
+            if (aceEditor) { aceEditor.session.setValue(htmlTextarea.value); }
+        };
+
+        var protectStructure = function () {
+            document.querySelectorAll('[data-protected]').forEach(function (el) {
+                el.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); });
+                el.addEventListener('keydown', function (e) { if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); } });
+                el.contentEditable = 'false';
+            });
+        };
+
+        btnCode.addEventListener('click', function () {
+            btnCode.classList.add('active');
+            btnVisual.classList.remove('active');
+            visualEditor.classList.remove('active');
+            syncToCode();
+        });
+
+        btnVisual.addEventListener('click', function () {
+            btnVisual.classList.add('active');
+            btnCode.classList.remove('active');
+            visualEditor.classList.add('active');
+            syncToVisual();
+        });
+
+        visualEditor.addEventListener('input', function () {
+            syncToCode();
+        });
+
+        visualEditor.addEventListener('paste', function (e) {
+            e.preventDefault();
+            var text = e.clipboardData.getData('text/html') || e.clipboardData.getData('text/plain');
+            document.execCommand('insertHTML', false, text);
+        });
+
+        document.querySelectorAll('#visualToolbar button[data-cmd]').forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                visualEditor.focus();
+                var cmd = btn.dataset.cmd;
+                var value = btn.dataset.value || '';
+                if (cmd === 'formatblock') {
+                    document.execCommand(cmd, false, '<' + value + '>');
+                } else {
+                    document.execCommand(cmd, false, value);
+                }
+                syncToCode();
+            });
+        });
+
+        visualEditor.addEventListener('keydown', function (e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                e.preventDefault();
+                visualEditor.undo();
+                syncToCode();
+            }
+        });
+
+        syncToVisual();
     }
 }());
 </script>
