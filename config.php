@@ -23,17 +23,32 @@ declare(strict_types=1);
  * Generate a new hash with:
  *   php -r "echo password_hash('your-password', PASSWORD_DEFAULT), PHP_EOL;"
  *
- * Default password below is: admin
+ * There is no default password: while this is empty the backend stays locked.
+ * The backend also refuses "admin" and any password shorter than
+ * CMS_ADMIN_PASSWORD_MIN_LENGTH, checked at login against what was typed.
  */
-const CMS_ADMIN_PASSWORD = '$2y$10$Io.s7YRvUmk4yo9Xzm2wV.FG8vhtR4fu3G/smjH7qCjWnLIMIc88G';
+const CMS_ADMIN_PASSWORD = '';
+const CMS_ADMIN_PASSWORD_MIN_LENGTH = 12;
 
 /** Backend session name and idle timeout (seconds). */
 const CMS_SESSION_NAME    = 'FederCMS';
 const CMS_SESSION_TIMEOUT = 7200;
 
-/** Brute force protection: max failed logins per window, window in seconds. */
+/**
+ * Brute force protection: max login attempts per client IP within the window
+ * (seconds). Counted server side in data/login_attempts.json, so dropping the
+ * session cookie does not reset the counter.
+ */
 const CMS_LOGIN_MAX_ATTEMPTS = 8;
 const CMS_LOGIN_WINDOW       = 900;
+
+/**
+ * Reverse proxies whose X-Forwarded-For header is trusted for the client IP
+ * (exact addresses, e.g. ['10.0.0.5']). Leave empty when visitors reach PHP
+ * directly. Behind a proxy that is not listed here every visitor shares the
+ * proxy's IP, so one attacker can lock the login for everybody.
+ */
+const CMS_TRUSTED_PROXIES = [];
 
 /* -------------------------------------------------------------------------
  * 2. PATHS

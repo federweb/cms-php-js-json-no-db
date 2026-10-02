@@ -118,19 +118,86 @@ if (isset($_GET['logout'])) {
     exit;
 }
 
-$loginError = '';
+/* ---- Login throttling ------------------------------------------------------
+ *
+ * Attempts are counted per client IP in a server side file, under an exclusive
+ * lock. A counter kept in the session is worthless: a client that never sends
+ * the cookie back starts from zero on every request.
+ */
 
-if (($_POST['action'] ?? '') === 'login') {
-    $attempts = (int)($_SESSION['login_attempts'] ?? 0);
-    $since    = (int)($_SESSION['login_first_attempt'] ?? 0);
+/** Client IP. X-Forwarded-For is only read behind a proxy listed in config.php. */
+function b_client_ip(): string
+{
+    $remote = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    if (!in_array($remote, CMS_TRUSTED_PROXIES, true)) {
+        return $remote;
+    }
+    $hops = array_map('trim', explode(',', (string)($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '')));
+    // Right to left: the first hop that is not one of our proxies is the client.
+    foreach (array_reverse($hops) as $hop) {
+        if (filter_var($hop, FILTER_VALIDATE_IP) !== false && !in_array($hop, CMS_TRUSTED_PROXIES, true)) {
+            return $hop;
+        }
+    }
+    return $remote;
+}
 
-    if ($since > 0 && (time() - $since) > CMS_LOGIN_WINDOW) {
-        $attempts = 0;
-        $_SESSION['login_first_attempt'] = 0;
+/**
+ * Run $fn(&$rows, $now) on the attempts table (client => count, first) under an
+ * exclusive lock and save it back. Entries older than the window are dropped.
+ */
+function b_login_attempts(callable $fn): mixed
+{
+    $fh = @fopen(CMS_DATA_DIR . '/login_attempts.json', 'c+');
+    if ($fh === false) {
+        throw new RuntimeException('Cannot open data/login_attempts.json: is data/ writable?');
+    }
+    flock($fh, LOCK_EX);
+    $rows = json_decode((string)stream_get_contents($fh), true);
+    $rows = is_array($rows) ? $rows : [];
+    $now  = time();
+    foreach ($rows as $key => $row) {
+        if ($now - (int)($row['first'] ?? 0) >= CMS_LOGIN_WINDOW) {
+            unset($rows[$key]);
+        }
+    }
+    $result = $fn($rows, $now);
+    ftruncate($fh, 0);
+    rewind($fh);
+    fwrite($fh, (string)json_encode($rows));
+    fflush($fh);
+    flock($fh, LOCK_UN);
+    fclose($fh);
+    return $result;
+}
+
+$loginError         = '';
+$passwordConfigured = CMS_ADMIN_PASSWORD !== '';
+
+if (($_POST['action'] ?? '') === 'login' && $passwordConfigured) {
+    $client = hash('sha256', b_client_ip()); // no raw IP addresses on disk
+
+    // The attempt is counted before the password is checked, so parallel
+    // requests cannot all get through before the first failure is saved.
+    try {
+        $wait = b_login_attempts(static function (array &$rows, int $now) use ($client): int {
+            $row = $rows[$client] ?? ['count' => 0, 'first' => $now];
+            if ((int)$row['count'] >= CMS_LOGIN_MAX_ATTEMPTS) {
+                return (int)$row['first'] + CMS_LOGIN_WINDOW - $now;
+            }
+            $row['count'] = (int)$row['count'] + 1;
+            $rows[$client] = $row;
+            return 0;
+        });
+    } catch (RuntimeException $ex) {
+        error_log('[FederCMS] ' . $ex->getMessage());
+        $wait = null;
     }
 
-    if ($attempts >= CMS_LOGIN_MAX_ATTEMPTS) {
-        $loginError = 'Too many failed attempts. Try again later.';
+    if ($wait === null) {
+        $loginError = 'Login is unavailable: the data/ folder is not writable.';
+    } elseif ($wait > 0) {
+        $loginError = 'Too many attempts. Try again in ' . (int)ceil($wait / 60) . ' minute(s).';
     } else {
         $password = (string)($_POST['password'] ?? '');
         $stored   = CMS_ADMIN_PASSWORD;
@@ -138,18 +205,22 @@ if (($_POST['action'] ?? '') === 'login') {
             ? password_verify($password, $stored)
             : hash_equals($stored, $password);
 
-        if ($ok) {
+        if ($ok && (strtolower($password) === 'admin' || mb_strlen($password) < CMS_ADMIN_PASSWORD_MIN_LENGTH)) {
+            $loginError = 'The password set in config.php is too weak: "admin" and passwords shorter than '
+                . CMS_ADMIN_PASSWORD_MIN_LENGTH . ' characters are refused. Set a new hash in CMS_ADMIN_PASSWORD.';
+        } elseif ($ok) {
+            b_login_attempts(static function (array &$rows) use ($client): void {
+                unset($rows[$client]);
+            });
             session_regenerate_id(true);
             $_SESSION['cms_authenticated'] = true;
             $_SESSION['cms_last_seen']     = time();
-            unset($_SESSION['login_attempts'], $_SESSION['login_first_attempt']);
             b_redirect();
+        } else {
+            error_log('[FederCMS] failed backend login from ' . b_client_ip());
+            usleep(400000);
+            $loginError = 'Wrong password.';
         }
-
-        $_SESSION['login_attempts'] = $attempts + 1;
-        $_SESSION['login_first_attempt'] = $since > 0 ? $since : time();
-        $loginError = 'Wrong password.';
-        usleep(400000);
     }
 }
 
@@ -196,8 +267,10 @@ if ($authenticated && $_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action']
             }
             $values['site_url'] = rtrim($values['site_url'], '/');
             Settings::save($values);
+            // Site URL and the language prefix change every URL in the sitemap.
+            Sitemap::generate();
             Sitemap::generateRobots();
-            b_flash('ok', 'Settings saved. robots.txt regenerated.');
+            b_flash('ok', 'Settings saved. sitemap.xml and robots.txt regenerated.');
             b_redirect(['p' => 'settings']);
         }
 
@@ -252,7 +325,9 @@ if ($authenticated && $_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action']
                 Languages::setDefault($id);
             }
             Store::flush();
-            b_flash('ok', 'Language saved.');
+            // Code, activation and default language all change page URLs.
+            Sitemap::generate();
+            b_flash('ok', 'Language saved and sitemap updated.');
             b_redirect(['p' => 'languages']);
         }
 
@@ -275,6 +350,7 @@ if ($authenticated && $_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action']
                     Languages::setDefault((int)$first['id']);
                 }
             }
+            Sitemap::generate();
             b_flash('ok', 'Language deleted.');
             b_redirect(['p' => 'languages']);
         }
@@ -779,6 +855,8 @@ tr:hover td{background:var(--bg)}
 .visual-editor-container.active~.visual-editor-toolbar{display:flex}
 .visual-editor-toolbar button{padding:.35rem .5rem;font-size:.75rem;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:3px;cursor:pointer;font-weight:600;min-width:32px}
 .visual-editor-toolbar button:hover,.visual-editor-toolbar button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.php-chip{display:inline-block;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;padding:0 .35rem;margin:0 .1rem;
+          border:1px dashed var(--accent);border-radius:4px;color:var(--accent);background:var(--bg);white-space:nowrap;cursor:default}
 
 /* media grid */
 .media-grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(11rem,1fr))}
@@ -805,12 +883,19 @@ tr:hover td{background:var(--bg)}
     <?php foreach (b_take_flash() as [$type, $msg]): ?>
         <p class="flash <?= e($type) ?>"><?= e($msg) ?></p>
     <?php endforeach; ?>
+    <?php if (!$passwordConfigured): ?>
+        <p class="flash warn">The backend is locked until a password is set: put the
+           <span class="mono">password_hash()</span> of a password of at least
+           <?= (int)CMS_ADMIN_PASSWORD_MIN_LENGTH ?> characters in
+           <span class="mono">CMS_ADMIN_PASSWORD</span> in config.php.</p>
+    <?php endif; ?>
     <input type="hidden" name="action" value="login">
     <div class="field">
         <label for="pw">Password</label>
-        <input type="password" id="pw" name="password" autocomplete="current-password" autofocus required>
+        <input type="password" id="pw" name="password" autocomplete="current-password" autofocus required
+               <?= $passwordConfigured ? '' : 'disabled' ?>>
     </div>
-    <button class="btn" type="submit">Sign in</button>
+    <button class="btn" type="submit"<?= $passwordConfigured ? '' : ' disabled' ?>>Sign in</button>
 </form>
 
 <?php else:
@@ -1254,6 +1339,7 @@ case 'pages':
 
         <div class="tabpane on" id="t-html">
             <div class="panel visual-editor-wrapper">
+                <p class="flash warn" id="visualNotice" hidden></p>
                 <div class="visual-editor-container" id="visualEditor" contenteditable="true" spellcheck="false"></div>
                 <div class="visual-editor-toolbar" id="visualToolbar">
                     <button type="button" data-cmd="bold" title="Bold"><strong>B</strong></button>
@@ -1891,52 +1977,196 @@ default:
     }
 
     /* ---- Visual HTML editor toggle (pages only) ----------------------- */
+    /*
+     * The page markup is a PHP template, but a contenteditable surface re-parses
+     * it as HTML, and the browser turns PHP tags into comments or escaped text.
+     * So every PHP block is swapped for an inert placeholder before the markup
+     * reaches the HTML parser and swapped back on the way out; pages where the
+     * parser would move a block are kept in code mode; and the code is only
+     * rewritten when something is actually edited in visual mode.
+     */
     var visualEditor = document.getElementById('visualEditor');
+    var visualNotice = document.getElementById('visualNotice');
     var htmlTextarea = document.getElementById('ed_html');
     var btnCode = document.getElementById('btnCode');
     var btnVisual = document.getElementById('btnVisual');
-    var aceEditor = htmlTextarea && htmlTextarea.previousElementSibling ? htmlTextarea.previousElementSibling.env && htmlTextarea.previousElementSibling.env.editor : null;
+    var aceHost = htmlTextarea ? htmlTextarea.previousElementSibling : null;
+    var aceEditor = aceHost && aceHost.env ? aceHost.env.editor : null;
 
     if (visualEditor && htmlTextarea && btnCode && btnVisual && aceEditor) {
-        var syncToVisual = function () {
-            visualEditor.innerHTML = htmlTextarea.value;
+        var OPEN = '', CLOSE = '';
+        var PHP_RE = /<\?(?:php|=)?[\s\S]*?(?:\?>|$)/g;
+        var TOKEN_RE = /(\d+)/g;
+        var SCAN_RE = /<(\/?)([a-zA-Z][\w:-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|(\d+)/g;
+        var inert = document.implementation.createHTMLDocument('');
+        var phpBlocks = [];
+
+        var shorten = function (code) {
+            code = code.replace(/\s+/g, ' ');
+            return code.length > 48 ? code.slice(0, 45) + '…' : code;
         };
 
-        var syncToCode = function () {
-            htmlTextarea.value = visualEditor.innerHTML;
-            if (aceEditor) { aceEditor.session.setValue(htmlTextarea.value); }
-        };
-
-        var protectStructure = function () {
-            document.querySelectorAll('[data-protected]').forEach(function (el) {
-                el.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); });
-                el.addEventListener('keydown', function (e) { if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); } });
-                el.contentEditable = 'false';
+        var protect = function (src) {
+            phpBlocks = [];
+            return src.replace(PHP_RE, function (block) {
+                phpBlocks.push(block);
+                return OPEN + (phpBlocks.length - 1) + CLOSE;
             });
         };
 
+        var restore = function (html) {
+            return html.replace(TOKEN_RE, function (token, i) {
+                return phpBlocks[+i] !== undefined ? phpBlocks[+i] : token;
+            });
+        };
+
+        /* Same parser and same context (a div) as the editor, but inert. */
+        var reparse = function (html) {
+            var box = inert.createElement('div');
+            box.innerHTML = html;
+            return box;
+        };
+
+        /*
+         * Tags and placeholders in source order. A placeholder inside a tag must
+         * sit in a quoted attribute value; anywhere else it is text-level PHP,
+         * located by the nearest tag on each side.
+         */
+        var scan = function (html) {
+            var res = { text: [], around: {}, attr: {}, bad: null }, events = [], m;
+            SCAN_RE.lastIndex = 0;
+            while ((m = SCAN_RE.exec(html)) !== null) {
+                if (m[4] !== undefined) {
+                    if (/<\/?$/.test(html.slice(Math.max(0, m.index - 2), m.index))) {
+                        res.bad = res.bad || m[4];          // PHP used as a tag name
+                    }
+                    events.push({ php: m[4] });
+                    continue;
+                }
+                var tag = m[1] + m[2].toLowerCase();
+                events.push({ tag: tag });
+                var unquoted = m[3].replace(/"[^"]*"|'[^']*'/g, '').match(/(\d+)/);
+                if (unquoted) { res.bad = res.bad || unquoted[1]; }
+                m[3].replace(TOKEN_RE, function (token, i) { res.attr[i] = tag; return token; });
+            }
+            events.forEach(function (ev, k) {
+                if (ev.php === undefined) { return; }
+                var prev = '', next = '', a, b;
+                for (a = k - 1; a >= 0; a--) { if (events[a].tag) { prev = events[a].tag; break; } }
+                for (b = k + 1; b < events.length; b++) { if (events[b].tag) { next = events[b].tag; break; } }
+                res.text.push(ev.php);
+                res.around[ev.php] = prev + '|' + next;
+            });
+            return res;
+        };
+
+        /* Index of the first PHP block the HTML parser would move or alter, or null. */
+        var unsafeBlock = function (source, parsed) {
+            var before = scan(source), after = scan(parsed), i, n;
+            if (before.bad !== null) { return before.bad; }
+            n = Math.max(before.text.length, after.text.length);
+            for (i = 0; i < n; i++) {
+                if (before.text[i] !== after.text[i]) {
+                    return before.text[i] !== undefined ? before.text[i] : after.text[i];
+                }
+                if (before.around[before.text[i]] !== after.around[before.text[i]]) { return before.text[i]; }
+            }
+            for (i in before.attr) {
+                if (Object.prototype.hasOwnProperty.call(before.attr, i) && before.attr[i] !== after.attr[i]) { return i; }
+            }
+            return null;
+        };
+
+        /* Text-level placeholders become non-editable chips showing the code. */
+        var chipify = function (root) {
+            var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), nodes = [], node;
+            while ((node = walker.nextNode())) {
+                if (node.nodeValue.indexOf(OPEN) !== -1 && !node.parentNode.closest('script, style, textarea')) {
+                    nodes.push(node);
+                }
+            }
+            nodes.forEach(function (text) {
+                var frag = document.createDocumentFragment(), value = text.nodeValue, last = 0, m;
+                TOKEN_RE.lastIndex = 0;
+                while ((m = TOKEN_RE.exec(value)) !== null) {
+                    frag.appendChild(document.createTextNode(value.slice(last, m.index)));
+                    var chip = document.createElement('span');
+                    chip.className = 'php-chip';
+                    chip.contentEditable = 'false';
+                    chip.dataset.php = m[1];
+                    chip.title = phpBlocks[+m[1]];
+                    chip.textContent = shorten(phpBlocks[+m[1]]);
+                    frag.appendChild(chip);
+                    last = m.index + m[0].length;
+                }
+                frag.appendChild(document.createTextNode(value.slice(last)));
+                text.parentNode.replaceChild(frag, text);
+            });
+        };
+
+        var toCode = function () {
+            var box = reparse(visualEditor.innerHTML);
+            box.querySelectorAll('span.php-chip[data-php]').forEach(function (chip) {
+                chip.replaceWith(OPEN + chip.dataset.php + CLOSE);
+            });
+            return restore(box.innerHTML);
+        };
+
+        var notice = function (message) {
+            if (visualNotice) {
+                visualNotice.textContent = message;
+                visualNotice.hidden = message === '';
+            }
+        };
+
+        var syncToCode = function () {
+            htmlTextarea.value = toCode();
+            aceEditor.session.setValue(htmlTextarea.value);
+        };
+
         btnCode.addEventListener('click', function () {
+            // Nothing to write back: visual edits are synced as they happen, and
+            // a page that was only looked at keeps its markup byte for byte.
             btnCode.classList.add('active');
             btnVisual.classList.remove('active');
             visualEditor.classList.remove('active');
-            syncToCode();
+            aceEditor.resize();
         });
 
         btnVisual.addEventListener('click', function () {
+            var src = htmlTextarea.value;
+            if (src.indexOf(OPEN) !== -1 || src.indexOf(CLOSE) !== -1) {
+                notice('Visual mode is not available: the markup contains the reserved characters U+E000/U+E001.');
+                return;
+            }
+            var safe = protect(src);
+            var parsed = reparse(safe).innerHTML;
+            var bad = unsafeBlock(safe, parsed);
+            if (bad !== null) {
+                notice('Visual mode is not available for this page: the HTML editor would move or alter the PHP code "'
+                    + shorten(phpBlocks[+bad] || '') + '". Keep editing it in code mode.');
+                return;
+            }
+            notice('');
+            visualEditor.innerHTML = parsed;
+            chipify(visualEditor);
             btnVisual.classList.add('active');
             btnCode.classList.remove('active');
             visualEditor.classList.add('active');
-            syncToVisual();
         });
 
-        visualEditor.addEventListener('input', function () {
-            syncToCode();
-        });
+        // Typing, toolbar commands and the browser's own undo/redo (Ctrl+Z,
+        // Ctrl+Y) all fire "input".
+        visualEditor.addEventListener('input', syncToCode);
 
         visualEditor.addEventListener('paste', function (e) {
             e.preventDefault();
-            var text = e.clipboardData.getData('text/html') || e.clipboardData.getData('text/plain');
-            document.execCommand('insertHTML', false, text);
+            var html = e.clipboardData.getData('text/html');
+            if (html) {
+                document.execCommand('insertHTML', false, html);
+            } else {
+                document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
+            }
         });
 
         document.querySelectorAll('#visualToolbar button[data-cmd]').forEach(function (btn) {
@@ -1953,16 +2183,6 @@ default:
                 syncToCode();
             });
         });
-
-        visualEditor.addEventListener('keydown', function (e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-                e.preventDefault();
-                visualEditor.undo();
-                syncToCode();
-            }
-        });
-
-        syncToVisual();
     }
 }());
 </script>

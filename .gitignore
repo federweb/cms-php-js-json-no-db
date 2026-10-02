@@ -1,0 +1,2 @@
+# Runtime state written by the backend (hashed client IPs of recent logins)
+data/login_attempts.json

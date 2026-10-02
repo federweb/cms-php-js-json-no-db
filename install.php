@@ -438,5 +438,6 @@ echo "  blocks    : " . count(Store::all('blocks')) . "\n";
 echo "  sitemap   : " . ($count >= 0
     ? "{$count} URLs\n"
     : "skipped (set Site URL in Settings, then press Generate)\n");
-echo "\nOpen backend.php and log in with the password set in config.php (default: admin).\n";
+echo "\nSet CMS_ADMIN_PASSWORD in config.php (at least " . CMS_ADMIN_PASSWORD_MIN_LENGTH
+    . " characters, there is no default), then open backend.php.\n";
 echo "Delete install.php when you are done.\n";

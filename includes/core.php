@@ -1098,18 +1098,107 @@ function cms_minify_html(string $html): string
             continue;
         }
         $chunk = preg_replace('/<!--(?!\[if)(?!<!)[^\[>].*?-->/s', '', $chunk) ?? $chunk;
-        $chunk = preg_replace('/\s{2,}/', ' ', $chunk) ?? $chunk;
-        $chunk = preg_replace('/>\s+</', '><', $chunk) ?? $chunk;
+        // Runs of HTML whitespace collapse to one space, never to nothing:
+        // "<b>Name:</b> <span>Mario</span>" must not render as "Name:Mario".
+        // The class is spelled out so &nbsp; (U+00A0) is never touched.
+        $chunk = preg_replace('/[\t\n\f\r ]+/', ' ', $chunk) ?? $chunk;
         $out  .= $chunk;
     }
     return trim($out);
 }
 
-/** Very small, safe CSS/JS whitespace trimmer used for inlined assets. */
+/**
+ * Small, safe CSS whitespace trimmer used for inlined assets.
+ *
+ * Strings, escapes and unquoted url() are copied verbatim. Whitespace is only
+ * dropped where CSS never needs it: around { } ; , ! and after ":". Around the
+ * > + ~ combinators it is dropped only in selectors, never inside parentheses
+ * or values, where "calc(1rem + 2px)" needs it. A space before ":" is kept,
+ * because ".nav :focus" and ".nav:focus" are different selectors.
+ */
 function cms_minify_css(string $css): string
 {
-    $css = preg_replace('#/\*(?!!).*?\*/#s', '', $css) ?? $css;
-    $css = preg_replace('/\s+/', ' ', $css) ?? $css;
-    $css = preg_replace('/\s*([{}:;,>~+])\s*/', '$1', $css) ?? $css;
-    return trim(str_replace(';}', '}', $css));
+    $out     = '';
+    $len     = strlen($css);
+    $parens  = 0;
+    $braces  = 0;
+    $inValue = false;  // after a declaration's ":", until ; { or }
+    $space   = false;  // whitespace seen and not yet written
+
+    for ($i = 0; $i < $len; $i++) {
+        $c = $css[$i];
+
+        if ($c === '/' && ($css[$i + 1] ?? '') === '*') {
+            $end  = strpos($css, '*/', $i + 2);
+            $end  = $end === false ? $len : $end + 2;
+            if (($css[$i + 2] ?? '') === '!') {      // /*! license */ is kept
+                $out  .= ($space && $out !== '' ? ' ' : '') . substr($css, $i, $end - $i);
+                $space = false;
+            }
+            $i = $end - 1;
+            continue;
+        }
+
+        if ($c === ' ' || $c === "\t" || $c === "\n" || $c === "\r" || $c === "\f") {
+            $space = true;
+            continue;
+        }
+
+        $combinator = ($c === '>' || $c === '+' || $c === '~') && $parens === 0 && !$inValue;
+        if ($space && $out !== '') {
+            $prev     = $out[strlen($out) - 1];
+            $prevComb = ($prev === '>' || $prev === '+' || $prev === '~') && $parens === 0 && !$inValue;
+            if (!str_contains('{};,!', $c) && !str_contains('{};,:(', $prev)
+                && $c !== ')' && !$combinator && !$prevComb) {
+                $out .= ' ';
+            }
+        }
+        $space = false;
+
+        if ($c === '"' || $c === "'") {
+            $j = $i + 1;
+            while ($j < $len && $css[$j] !== $c && $css[$j] !== "\n") {
+                $j += $css[$j] === '\\' ? 2 : 1;
+            }
+            $out .= substr($css, $i, min($j, $len - 1) - $i + 1);
+            $i    = $j;
+            continue;
+        }
+        if ($c === '\\') {
+            $out .= substr($css, $i, 2);
+            $i++;
+            continue;
+        }
+        if (($c === 'u' || $c === 'U') && strncasecmp(substr($css, $i, 4), 'url(', 4) === 0
+            && ($i === 0 || !preg_match('/[\w-]/', $css[$i - 1]))
+            && !preg_match('/\G\s*["\']/', $css, $m, 0, $i + 4)) {
+            $end  = strpos($css, ')', $i + 4);
+            $end  = $end === false ? $len - 1 : $end;
+            $out .= substr($css, $i, $end - $i + 1);
+            $i    = $end;
+            continue;
+        }
+
+        switch ($c) {
+            case '(': $parens++; break;
+            case ')': $parens = max(0, $parens - 1); break;
+            case '{': $braces++; $inValue = false; break;
+            case '}':
+                $braces  = max(0, $braces - 1);
+                $inValue = false;
+                if ($out !== '' && $out[strlen($out) - 1] === ';') {
+                    $out = substr($out, 0, -1);
+                }
+                break;
+            case ';': $inValue = false; break;
+            case ':':
+                if ($braces > 0 && $parens === 0) {
+                    $inValue = true;
+                }
+                break;
+        }
+        $out .= $c;
+    }
+
+    return trim($out);
 }

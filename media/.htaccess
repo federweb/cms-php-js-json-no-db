@@ -1,0 +1,32 @@
+# =============================================================================
+# FederCMS - media/: uploaded files are data, never code.
+# The upload whitelist already refuses scripts; this is the second line of
+# defence, for files that reach the folder some other way (FTP, a future bug).
+# =============================================================================
+
+Options -Indexes -ExecCGI -Includes
+
+# Script extensions are never served from here, whatever handler the host maps
+# them to (mod_php, PHP-FPM, CGI), also as an inner extension ("x.php.jpg").
+<FilesMatch "(?i)\.(php\d*|phtml|phar|pht|phps|cgi|pl|py|rb|sh|asp|aspx|jsp|shtml?)(\.|$)">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_mime.c>
+    RemoveHandler .php .php3 .php4 .php5 .php7 .php8 .phtml .phar .pht
+    RemoveType    .php .php3 .php4 .php5 .php7 .php8 .phtml .phar .pht
+</IfModule>
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+
+# SVG can carry scripts. Opened directly it runs sandboxed: no script, no
+# access to the site origin. Used through <img> nothing changes.
+<IfModule mod_headers.c>
+    <FilesMatch "(?i)\.svgz?$">
+        Header always set Content-Security-Policy "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox"
+    </FilesMatch>
+</IfModule>

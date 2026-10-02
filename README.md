@@ -17,9 +17,9 @@ developer. Every page is your own HTML+PHP, your own CSS, your own JS.
 
 ```bash
 # 1. copy the files into the web root
-# 2. set the backend password in config.php
+# 2. set the backend password in config.php (at least 12 characters)
 php -r "echo password_hash('your-password', PASSWORD_DEFAULT), PHP_EOL;"
-#    paste the result into CMS_ADMIN_PASSWORD
+#    paste the result into CMS_ADMIN_PASSWORD - there is no default password
 
 # 3. seed the JSON tables and the bilingual demo site
 php install.php          # or open install.php in the browser
@@ -28,8 +28,10 @@ php install.php          # or open install.php in the browser
 rm install.php
 ```
 
-Then open `backend.php` (default password: `admin`) and set **Site URL** under
-*Settings* — canonical URLs, hreflang and the sitemap are built from it.
+Then open `backend.php` and set **Site URL** under *Settings* — canonical URLs,
+hreflang and the sitemap are built from it. The backend stays locked while
+`CMS_ADMIN_PASSWORD` is empty, and refuses `admin` or any password shorter than
+`CMS_ADMIN_PASSWORD_MIN_LENGTH` (12).
 
 Requirements: PHP 8.0+ and URL rewriting. Write permission is needed on
 `data/`, `media/` and on the CMS folder itself (for `sitemap.xml` / `robots.txt`).
@@ -70,6 +72,9 @@ location /CMS/ {
 location ~ ^/CMS/(data|includes)/     { deny all; }
 location = /CMS/config.php            { deny all; }
 location ~* ^/CMS/media/.*\.(php|phtml|phar)$ { deny all; }
+location ~* ^/CMS/media/.*\.svgz?$ {
+    add_header Content-Security-Policy "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox" always;
+}
 ```
 
 At the domain root, drop the `/CMS` prefix from every line. Without such a rule
@@ -285,7 +290,11 @@ printed. Add a position and it appears in the backend menu immediately:
 ## 9. Backend
 
 `backend.php` — password from `config.php`, session cookie `HttpOnly`+`SameSite`,
-CSRF token on every write, brute-force throttling, `X-Robots-Tag: noindex`.
+CSRF token on every write, `X-Robots-Tag: noindex`. Login attempts are limited
+per client IP (`CMS_LOGIN_MAX_ATTEMPTS` per `CMS_LOGIN_WINDOW`) and counted server
+side in `data/login_attempts.json` (hashed IPs), so a client cannot reset the
+counter by dropping its cookie. Behind a reverse proxy, list it in
+`CMS_TRUSTED_PROXIES`, otherwise all visitors share the proxy's IP.
 
 | Section | What it does |
 |---|---|
@@ -327,8 +336,8 @@ means **backend access equals code execution**. Therefore:
 
 - use a strong password hash in `config.php` and serve the site over HTTPS;
 - keep `backend.php` behind an extra layer if you can (IP allowlist, basic auth);
-- `data/` and `includes/` are denied by `.htaccess`; `media/` has PHP execution
-  disabled and serves SVG under a restrictive CSP;
+- `data/` and `includes/` are denied by `.htaccess`; `media/.htaccess` refuses
+  any script extension and serves SVG under a sandboxing CSP;
 - uploads are extension-whitelisted, size-limited and renamed to safe slugs.
 
 On nginx, replicate the rewrite in your server block:
@@ -338,6 +347,9 @@ location / { try_files $uri $uri/ /index.php?$query_string; }
 location ~ ^/(data|includes)/ { deny all; }
 location ~ ^/config\.php { deny all; }
 location ~* ^/media/.*\.(php|phtml|phar)$ { deny all; }
+location ~* ^/media/.*\.svgz?$ {
+    add_header Content-Security-Policy "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox" always;
+}
 ```
 
 ---
